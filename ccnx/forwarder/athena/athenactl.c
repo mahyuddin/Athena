@@ -62,6 +62,7 @@
 #define COMMAND_LIST "list"
 #define SUBCOMMAND_LIST_LINKS "links"
 #define SUBCOMMAND_LIST_FIB "fib"
+#define SUBCOMMAND_LIST_PIT "pit"
 #define SUBCOMMAND_LIST_ROUTES "routes"
 #define SUBCOMMAND_LIST_CONNECTIONS "connections"
 
@@ -80,8 +81,8 @@ athenactl_EncodeMessage(CCNxMetaMessage *message)
     parcSigner_Release(&signer);
 }
 
-static const char *
-_athenactl_SendInterestControl(PARCIdentity *identity, CCNxMetaMessage *message)
+const char *
+athenactl_SendInterestControl(PARCIdentity *identity, CCNxMetaMessage *message)
 {
     const char *result = NULL;
     CCNxPortalFactory *factory = ccnxPortalFactory_Create(identity);
@@ -125,7 +126,7 @@ _athenactl_AddListener(PARCIdentity *identity, int argc, char **argv)
         return 1;
     }
 
-    CCNxName *name = ccnxName_CreateFromURI(CCNxNameAthenaCommand_LinkConnect);
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_LinkConnect);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
@@ -143,7 +144,7 @@ _athenactl_AddListener(PARCIdentity *identity, int argc, char **argv)
     ccnxInterest_SetPayload(interest, payload);
     parcBuffer_Release(&payload);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
     if (result) {
         printf("Link: %s\n", result);
         parcMemory_Deallocate(&result);
@@ -162,7 +163,7 @@ _athenactl_AddConnection(PARCIdentity *identity, int argc, char **argv)
         return 1;
     }
 
-    CCNxName *name = ccnxName_CreateFromURI(CCNxNameAthenaCommand_LinkConnect);
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_LinkConnect);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
@@ -180,7 +181,7 @@ _athenactl_AddConnection(PARCIdentity *identity, int argc, char **argv)
     ccnxInterest_SetPayload(interest, payload);
     parcBuffer_Release(&payload);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
     if (result) {
         printf("Link: %s\n", result);
         parcMemory_Deallocate(&result);
@@ -199,7 +200,7 @@ _athenactl_AddLink(PARCIdentity *identity, int argc, char **argv)
         return 1;
     }
 
-    CCNxName *name = ccnxName_CreateFromURI(CCNxNameAthenaCommand_LinkConnect);
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_LinkConnect);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
@@ -209,7 +210,7 @@ _athenactl_AddLink(PARCIdentity *identity, int argc, char **argv)
     ccnxInterest_SetPayload(interest, payload);
     parcBuffer_Release(&payload);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
     if (result) {
         printf("Link: %s\n", result);
         parcMemory_Deallocate(&result);
@@ -228,7 +229,7 @@ _athenactl_AddRoute(PARCIdentity *identity, int argc, char **argv)
         return 1;
     }
 
-    CCNxName *name = ccnxName_CreateFromURI(CCNxNameAthenaCommand_FIBAddRoute);
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_FIBAddRoute);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
@@ -242,7 +243,7 @@ _athenactl_AddRoute(PARCIdentity *identity, int argc, char **argv)
     ccnxInterest_SetPayload(interest, payload);
     parcBuffer_Release(&payload);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
     if (result) {
         printf("FIB: %s\n", result);
         parcMemory_Deallocate(&result);
@@ -261,7 +262,7 @@ _athenactl_RemoveRoute(PARCIdentity *identity, int argc, char **argv)
         return 1;
     }
 
-    CCNxName *name = ccnxName_CreateFromURI(CCNxNameAthenaCommand_FIBRemoveRoute);
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_FIBRemoveRoute);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
@@ -275,7 +276,7 @@ _athenactl_RemoveRoute(PARCIdentity *identity, int argc, char **argv)
     ccnxInterest_SetPayload(interest, payload);
     parcBuffer_Release(&payload);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
     if (result) {
         printf("FIB: %s\n", result);
         parcMemory_Deallocate(&result);
@@ -315,11 +316,11 @@ _athenactl_Add(PARCIdentity *identity, int argc, char **argv)
 static int
 _athenactl_ListLinks(PARCIdentity *identity, int argc, char **argv)
 {
-    CCNxName *name = ccnxName_CreateFromURI(CCNxNameAthenaCommand_LinkList);
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_LinkList);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
     printf("Link: Interface list");
     if (result) {
         PARCBuffer *buffer = parcBuffer_WrapCString((char *) result);
@@ -379,13 +380,30 @@ _athenactl_ListLinks(PARCIdentity *identity, int argc, char **argv)
 }
 
 static int
-_athenactl_ListFIB(PARCIdentity *identity, int argc, char **argv)
+_athenactl_ListPIT(PARCIdentity *identity, int argc, char **argv)
 {
-    CCNxName *name = ccnxName_CreateFromURI(CCNxNameAthenaCommand_FIBList);
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_PITList);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
+    if (result) {
+        printf("%s\n", result);
+        parcMemory_Deallocate(&result);
+    }
+    ccnxMetaMessage_Release(&interest);
+
+    return 0;
+}
+
+static int
+_athenactl_ListFIB(PARCIdentity *identity, int argc, char **argv)
+{
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_FIBList);
+    CCNxInterest *interest = ccnxInterest_CreateSimple(name);
+    ccnxName_Release(&name);
+
+    const char *result = athenactl_SendInterestControl(identity, interest);
     if (result) {
         PARCJSON *jsonContent = parcJSON_ParseString(result);
         if (jsonContent != NULL) {
@@ -440,6 +458,8 @@ _athenactl_List(PARCIdentity *identity, int argc, char **argv)
         return _athenactl_ListFIB(identity, --argc, &argv[1]);
     } else if (strcasecmp(subcommand, SUBCOMMAND_LIST_FIB) == 0) {
         return _athenactl_ListFIB(identity, --argc, &argv[1]);
+    } else if (strcasecmp(subcommand, SUBCOMMAND_LIST_PIT) == 0) {
+        return _athenactl_ListPIT(identity, --argc, &argv[1]);
     }
     printf("usage: list links/connections/routes\n");
     return 1;
@@ -453,7 +473,7 @@ _athenactl_RemoveLink(PARCIdentity *identity, int argc, char **argv)
         return 1;
     }
 
-    CCNxName *name = ccnxName_CreateFromURI(CCNxNameAthenaCommand_LinkDisconnect);
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_LinkDisconnect);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
@@ -461,7 +481,7 @@ _athenactl_RemoveLink(PARCIdentity *identity, int argc, char **argv)
     ccnxInterest_SetPayload(interest, payload);
     parcBuffer_Release(&payload);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
     if (result) {
         printf("Link: %s\n", result);
         parcMemory_Deallocate(&result);
@@ -495,11 +515,11 @@ _athenactl_Remove(PARCIdentity *identity, int argc, char **argv)
 static int
 _athenactl_SetDebug(PARCIdentity *identity, int argc, char **argv)
 {
-    CCNxName *name = ccnxName_CreateFromURI(CCNxNameAthenaCommand_Set "/" AthenaCommand_LogLevel "/" AthenaCommand_LogDebug);
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_Set "/" AthenaCommand_LogLevel "/" AthenaCommand_LogDebug);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
     if (result) {
         printf("%s\n", result);
         parcMemory_Deallocate(&result);
@@ -520,11 +540,11 @@ _athenactl_SetLogLevel(PARCIdentity *identity, int argc, char **argv)
 
     char logLevelURI[MAXPATHLEN];
     sprintf(logLevelURI, "%s/level/%s", CCNxNameAthenaCommand_Set, argv[0]);
-    CCNxName *name = ccnxName_CreateFromURI(logLevelURI);
+    CCNxName *name = ccnxName_CreateFromCString(logLevelURI);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
     if (result) {
         printf("%s\n", result);
         parcMemory_Deallocate(&result);
@@ -538,11 +558,11 @@ _athenactl_SetLogLevel(PARCIdentity *identity, int argc, char **argv)
 static int
 _athenactl_UnSetDebug(PARCIdentity *identity, int argc, char **argv)
 {
-    CCNxName *name = ccnxName_CreateFromURI(CCNxNameAthenaCommand_Set "/" AthenaCommand_LogLevel "/" AthenaCommand_LogInfo);
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_Set "/" AthenaCommand_LogLevel "/" AthenaCommand_LogInfo);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
     if (result) {
         printf("%s\n", result);
         parcMemory_Deallocate(&result);
@@ -593,7 +613,7 @@ _athenactl_UnSet(PARCIdentity *identity, int argc, char **argv)
 static int
 _athenactl_Quit(PARCIdentity *identity, int argc, char **argv)
 {
-    CCNxName *name = ccnxName_CreateFromURI(CCNxNameAthenaCommand_Quit);
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_Quit);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
@@ -601,7 +621,7 @@ _athenactl_Quit(PARCIdentity *identity, int argc, char **argv)
     ccnxInterest_SetPayload(interest, payload);
     parcBuffer_Release(&payload);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
     if (result) {
         printf("%s\n", result);
         parcMemory_Deallocate(&result);
@@ -629,7 +649,7 @@ _athenactl_Run(PARCIdentity *identity, int argc, char **argv)
         linkSpecification = constructedLinkSpecification;
     }
 
-    CCNxName *name = ccnxName_CreateFromURI(CCNxNameAthenaCommand_Run);
+    CCNxName *name = ccnxName_CreateFromCString(CCNxNameAthenaCommand_Run);
     CCNxInterest *interest = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
@@ -637,7 +657,38 @@ _athenactl_Run(PARCIdentity *identity, int argc, char **argv)
     ccnxInterest_SetPayload(interest, payload);
     parcBuffer_Release(&payload);
 
-    const char *result = _athenactl_SendInterestControl(identity, interest);
+    const char *result = athenactl_SendInterestControl(identity, interest);
+    if (result) {
+        printf("%s\n", result);
+        parcMemory_Deallocate(&result);
+    }
+
+    ccnxMetaMessage_Release(&interest);
+
+    return 0;
+}
+
+static int
+_athenactl_InputCommand(PARCIdentity *identity, int argc, char **argv)
+{
+    CCNxName *name = ccnxName_CreateFromCString(argv[0]);
+    CCNxInterest *interest = ccnxInterest_CreateSimple(name);
+    ccnxName_Release(&name);
+    if (argc > 1) {
+        PARCBufferComposer *payloadComposer = parcBufferComposer_Create();
+        parcBufferComposer_Format(payloadComposer, "%s", argv[1]);
+        argc--; argv++;
+        while (argc > 1) {
+            parcBufferComposer_Format(payloadComposer, " %s", argv[1]);
+            argc--; argv++;
+        }
+        PARCBuffer *payload = parcBufferComposer_GetBuffer(payloadComposer);
+        parcBuffer_Flip(payload);
+        ccnxInterest_SetPayload(interest, payload);
+        parcBufferComposer_Release(&payloadComposer);
+    }
+
+    const char *result = athenactl_SendInterestControl(identity, interest);
     if (result) {
         printf("%s\n", result);
         parcMemory_Deallocate(&result);
@@ -679,8 +730,12 @@ athenactl_Command(PARCIdentity *identity, int argc, char **argv)
     if (strcasecmp(command, COMMAND_QUIT) == 0) {
         return _athenactl_Quit(identity, --argc, &argv[1]);
     }
+    if (strncasecmp(command, CCNxNameAthena_Forwarder, strlen(CCNxNameAthena_Forwarder)) == 0) {
+        return _athenactl_InputCommand(identity, argc, &argv[0]);
+    }
     printf("athenactl: unknown command\n");
     printf("commands: add/list/remove/set/unset/spawn/quit\n");
+    printf("      or: <ccnx URI> <payload>\n");
     return 1;
 }
 
@@ -698,4 +753,5 @@ athenactl_Usage(void)
     printf("        set level <off/notice/info/debug/error/all>\n");
     printf("        spawn <port>\n");
     printf("        quit\n");
+    printf("        <ccnx URI> <payload>\n");
 }

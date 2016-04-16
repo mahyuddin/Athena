@@ -82,8 +82,8 @@ _create_response(Athena *athena, CCNxName *ccnxName, const char *format, ...)
 
     PARCBuffer *responsePayload = parcBuffer_AllocateCString(responseBuffer);
 
-    parcLog_Debug(athena->log, responseBuffer);
-    CCNxContentObject *responseContent = ccnxContentObject_CreateWithDataPayload(ccnxName, responsePayload);
+    parcLog_Info(athena->log, responseBuffer);
+    CCNxContentObject *responseContent = ccnxContentObject_CreateWithNameAndPayload(ccnxName, responsePayload);
     CCNxMetaMessage *responseMessage = ccnxMetaMessage_CreateFromContentObject(responseContent);
 
     ccnxContentObject_Release(&responseContent);
@@ -123,7 +123,7 @@ _create_stats_response(Athena *athena, CCNxName *ccnxName)
     parcMemory_Deallocate(&jsonString);
 
     CCNxContentObject *contentObject =
-        ccnxContentObject_CreateWithDataPayload(ccnxName, parcBuffer_Flip(payload));
+        ccnxContentObject_CreateWithNameAndPayload(ccnxName, parcBuffer_Flip(payload));
     ccnxContentObject_SetExpiryTime(contentObject, nowInMillis + 100); // this response is good for 100 millis
 
     CCNxMetaMessage *result = ccnxMetaMessage_CreateFromContentObject(contentObject);
@@ -132,6 +132,27 @@ _create_stats_response(Athena *athena, CCNxName *ccnxName)
     parcBuffer_Release(&payload);
 
     return result;
+}
+
+void
+athenaInterestControl_LogConfigurationChange(Athena *athena, CCNxName *ccnxName, const char *format, ...)
+{
+    if (athena->configurationLog) {
+        const char *name = ccnxName_ToString(ccnxName);
+        parcOutputStream_WriteCString(athena->configurationLog, name);
+        parcMemory_Deallocate(&name);
+
+        char configurationLogBuffer[MAXPATHLEN] = {0};
+        if (format) {
+            va_list ap;
+            va_start(ap, format);
+
+            parcOutputStream_WriteCString(athena->configurationLog, " ");
+            vsprintf(configurationLogBuffer, format, ap);
+            parcOutputStream_WriteCString(athena->configurationLog, configurationLogBuffer);
+        }
+        parcOutputStream_WriteCString(athena->configurationLog, "\n");
+    }
 }
 
 static CCNxMetaMessage *
@@ -153,26 +174,32 @@ _Control_Command_Set(Athena *athena, CCNxName *ccnxName, const char *command)
         if (strcasecmp(level, AthenaCommand_LogDebug) == 0) {
             athenaTransportLinkAdapter_SetLogLevel(athena->athenaTransportLinkAdapter, PARCLogLevel_Debug);
             parcLog_SetLevel(athena->log, PARCLogLevel_Debug);
+            athenaInterestControl_LogConfigurationChange(athena, ccnxName, NULL);
             responseMessage = _create_response(athena, ccnxName, "set athena logging level to %s", AthenaCommand_LogDebug);
         } else if (strcasecmp(level, AthenaCommand_LogInfo) == 0) {
             athenaTransportLinkAdapter_SetLogLevel(athena->athenaTransportLinkAdapter, PARCLogLevel_Info);
             parcLog_SetLevel(athena->log, PARCLogLevel_Info);
+            athenaInterestControl_LogConfigurationChange(athena, ccnxName, NULL);
             responseMessage = _create_response(athena, ccnxName, "set athena logging level to %s", AthenaCommand_LogInfo);
         } else if (strcasecmp(level, AthenaCommand_LogOff) == 0) {
             athenaTransportLinkAdapter_SetLogLevel(athena->athenaTransportLinkAdapter, PARCLogLevel_Off);
             parcLog_SetLevel(athena->log, PARCLogLevel_Off);
+            athenaInterestControl_LogConfigurationChange(athena, ccnxName, NULL);
             responseMessage = _create_response(athena, ccnxName, "set athena logging level to %s", AthenaCommand_LogOff);
         } else if (strcasecmp(level, AthenaCommand_LogAll) == 0) {
             athenaTransportLinkAdapter_SetLogLevel(athena->athenaTransportLinkAdapter, PARCLogLevel_All);
             parcLog_SetLevel(athena->log, PARCLogLevel_All);
+            athenaInterestControl_LogConfigurationChange(athena, ccnxName, NULL);
             responseMessage = _create_response(athena, ccnxName, "set athena logging level to %s", AthenaCommand_LogAll);
         } else if (strcasecmp(level, AthenaCommand_LogError) == 0) {
             athenaTransportLinkAdapter_SetLogLevel(athena->athenaTransportLinkAdapter, PARCLogLevel_Error);
             parcLog_SetLevel(athena->log, PARCLogLevel_Error);
+            athenaInterestControl_LogConfigurationChange(athena, ccnxName, NULL);
             responseMessage = _create_response(athena, ccnxName, "set athena logging level to %s", AthenaCommand_LogError);
         } else if (strcasecmp(level, AthenaCommand_LogNotice) == 0) {
             athenaTransportLinkAdapter_SetLogLevel(athena->athenaTransportLinkAdapter, PARCLogLevel_Notice);
             parcLog_SetLevel(athena->log, PARCLogLevel_Notice);
+            athenaInterestControl_LogConfigurationChange(athena, ccnxName, NULL);
             responseMessage = _create_response(athena, ccnxName, "set athena logging level to %s", AthenaCommand_LogNotice);
         } else {
             responseMessage = _create_response(athena, ccnxName, "unknown logging level (%s)", level);
@@ -190,6 +217,7 @@ static CCNxMetaMessage *
 _Control_Command_Quit(Athena *athena, CCNxName *ccnxName, const char *command)
 {
     athena->athenaState = Athena_Exit;
+    athenaInterestControl_LogConfigurationChange(athena, ccnxName, NULL);
     return _create_response(athena, ccnxName, "Athena exiting ...");
 }
 
@@ -238,6 +266,8 @@ _Control_Command_Spawn(Athena *athena, CCNxName *ccnxName, const char *command, 
         return responseMessage;
     }
     athena_Release(&newAthena);
+
+    athenaInterestControl_LogConfigurationChange(athena, ccnxName, "%s", connectionSpecification);
 
     responseMessage = _create_response(athena, ccnxName, "Athena process thread started on %s", connectionSpecification);
     return responseMessage;
@@ -310,14 +340,21 @@ _PIT_Command(Athena *athena, CCNxInterest *interest)
         CCNxNameSegment *nameSegment = ccnxName_GetSegment(ccnxName, AthenaCommandSegment);
         char *command = ccnxNameSegment_ToString(nameSegment);
 
-        //char *arguments = _get_arguments(interest);
-
-        //responseMessage = _create_response(athena, ccnxName, ...
-
-        //parcMemory_Deallocate(&command);
-        //if (arguments) {
-        //    parcMemory_Deallocate(&arguments);
-        //}
+        if (strcasecmp(command, AthenaCommand_List) == 0) {
+            parcLog_Debug(athena->log, "PIT List command invoked");
+            PARCList *pitEntries = athenaPIT_CreateEntryList(athena->athenaPIT);
+            printf("\n");
+            for (size_t i = 0; i < parcList_Size(pitEntries); ++i) {
+                PARCBuffer *strbuf = parcList_GetAtIndex(pitEntries, i);
+                char *toprint = parcBuffer_ToString(strbuf);
+                parcLog_Info(athena->log, "%s\n", toprint);
+                parcMemory_Deallocate(&toprint);
+            }
+            parcList_Release(&pitEntries);
+            responseMessage = _create_response(athena, ccnxName, "PIT listed on forwarder output log.");
+        } else {
+            responseMessage = _create_response(athena, ccnxName, "Unknown command: %s", command);
+        }
 
         parcMemory_Deallocate(&command);
     }
@@ -390,7 +427,7 @@ _create_FIBList_response(Athena *athena, CCNxName *ccnxName, PARCList *fibEntryL
     PARCBuffer *payload = parcBuffer_CreateFromArray(jsonString, strlen(jsonString));
 
     CCNxContentObject *contentObject =
-        ccnxContentObject_CreateWithDataPayload(ccnxName, parcBuffer_Flip(payload));
+        ccnxContentObject_CreateWithNameAndPayload(ccnxName, parcBuffer_Flip(payload));
 
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -442,7 +479,7 @@ _FIB_Command(Athena *athena, CCNxInterest *interest)
                 parcMemory_Deallocate(&arguments);
                 return responseMessage;
             }
-            CCNxName *prefixName = ccnxName_CreateFromURI(prefix);
+            CCNxName *prefixName = ccnxName_CreateFromCString(prefix);
             if (prefixName == NULL) {
                 responseMessage = _create_response(athena, ccnxName, "Unable to parse prefix %s", prefix);
                 parcMemory_Deallocate(&command);
@@ -463,6 +500,7 @@ _FIB_Command(Athena *athena, CCNxInterest *interest)
                 char *routePrefix = ccnxName_ToString(prefixName);
                 const char *linkIdName = athenaTransportLinkAdapter_LinkIdToName(athena->athenaTransportLinkAdapter, linkId);
                 responseMessage = _create_response(athena, ccnxName, "%s route %s -> %s", command, routePrefix, linkIdName);
+                athenaInterestControl_LogConfigurationChange(athena, ccnxName, "%s %s", routePrefix, linkIdName);
                 parcMemory_Deallocate(&routePrefix);
             } else {
                 responseMessage = _create_response(athena, ccnxName, "%s failed", command);
@@ -518,6 +556,7 @@ _TransportLinkAdapter_Command(Athena *athena, CCNxInterest *interest)
                 parcURI_Release(&connectionURI);
                 if (linkName) {
                     responseMessage = _create_response(athena, ccnxName, "%s", linkName);
+                    athenaInterestControl_LogConfigurationChange(athena, ccnxName, "%s", arguments);
                 } else {
                     responseMessage = _create_response(athena, ccnxName, "New %s link failed: %s", arguments, strerror(errno));
                 }
@@ -529,6 +568,7 @@ _TransportLinkAdapter_Command(Athena *athena, CCNxInterest *interest)
                     responseMessage = _create_response(athena, ccnxName, "removal of %s failed", arguments);
                 } else {
                     responseMessage = _create_response(athena, ccnxName, "%s removed", arguments);
+                    athenaInterestControl_LogConfigurationChange(athena, ccnxName, "%s", arguments);
                 }
             }
         } else {
@@ -547,31 +587,31 @@ athenaInterestControl(Athena *athena, CCNxInterest *interest, PARCBitVector *ing
     CCNxMetaMessage *responseMessage = NULL;
     CCNxName *ccnxName = ccnxInterest_GetName(interest);
 
-    CCNxName *ccnxComponentName = ccnxName_CreateFromURI(CCNxNameAthena_Control);
+    CCNxName *ccnxComponentName = ccnxName_CreateFromCString(CCNxNameAthena_Control);
     if (ccnxName_StartsWith(ccnxName, ccnxComponentName) == true) {
         responseMessage = _Control_Command(athena, interest);
     }
     ccnxName_Release(&ccnxComponentName);
 
-    ccnxComponentName = ccnxName_CreateFromURI(CCNxNameAthena_Link);
+    ccnxComponentName = ccnxName_CreateFromCString(CCNxNameAthena_Link);
     if (ccnxName_StartsWith(ccnxName, ccnxComponentName) == true) {
         responseMessage = _TransportLinkAdapter_Command(athena, interest);
     }
     ccnxName_Release(&ccnxComponentName);
 
-    ccnxComponentName = ccnxName_CreateFromURI(CCNxNameAthena_FIB);
+    ccnxComponentName = ccnxName_CreateFromCString(CCNxNameAthena_FIB);
     if (ccnxName_StartsWith(ccnxName, ccnxComponentName) == true) {
         responseMessage = _FIB_Command(athena, interest);
     }
     ccnxName_Release(&ccnxComponentName);
 
-    ccnxComponentName = ccnxName_CreateFromURI(CCNxNameAthena_PIT);
+    ccnxComponentName = ccnxName_CreateFromCString(CCNxNameAthena_PIT);
     if (ccnxName_StartsWith(ccnxName, ccnxComponentName) == true) {
         responseMessage = _PIT_Command(athena, interest);
     }
     ccnxName_Release(&ccnxComponentName);
 
-    ccnxComponentName = ccnxName_CreateFromURI(CCNxNameAthena_ContentStore);
+    ccnxComponentName = ccnxName_CreateFromCString(CCNxNameAthena_ContentStore);
     if (ccnxName_StartsWith(ccnxName, ccnxComponentName) == true) {
         responseMessage = _ContentStore_Command(athena, interest);
     }

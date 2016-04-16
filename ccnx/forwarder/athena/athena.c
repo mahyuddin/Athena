@@ -44,6 +44,7 @@
 #include <ccnx/common/ccnx_Interest.h>
 #include <ccnx/common/ccnx_InterestReturn.h>
 #include <ccnx/common/ccnx_ContentObject.h>
+#include <ccnx/common/ccnx_Manifest.h>
 
 #include <ccnx/common/validation/ccnxValidation_CRC32C.h>
 #include <ccnx/common/codec/ccnxCodec_TlvPacket.h>
@@ -91,6 +92,9 @@ _athenaDestroy(Athena **athena)
     athenaPIT_Release(&((*athena)->athenaPIT));
     athenaFIB_Release(&((*athena)->athenaFIB));
     parcLog_Release(&((*athena)->log));
+    if ((*athena)->configurationLog) {
+        parcOutputStream_Release(&((*athena)->configurationLog));
+    }
 }
 
 parcObject_ExtendPARCObject(Athena, _athenaDestroy, NULL, NULL, NULL, NULL, NULL, NULL);
@@ -100,7 +104,7 @@ athena_Create(size_t contentStoreSizeInMB)
 {
     Athena *athena = parcObject_CreateAndClearInstance(Athena);
 
-    athena->athenaName = ccnxName_CreateFromURI(CCNxNameAthena_Forwarder);
+    athena->athenaName = ccnxName_CreateFromCString(CCNxNameAthena_Forwarder);
     assertNotNull(athena->athenaName, "Failed to create forwarder name (%s)", CCNxNameAthena_Forwarder);
 
     athena->athenaFIB = athenaFIB_Create();
@@ -211,17 +215,24 @@ _processInterest(Athena *athena, CCNxInterest *interest, PARCBitVector *ingressV
     //         non-local interface so we need not check that here.
     //
     ccnxName = ccnxInterest_GetName(interest);
-    PARCBitVector *egressVector = athenaFIB_Lookup(athena->athenaFIB, ccnxName);
+    PARCBitVector *egressVector = athenaFIB_Lookup(athena->athenaFIB, ccnxName, ingressVector);
 
     if (egressVector != NULL) {
-        // Remove the link the interest came from if it was included in the FIB entry
-        parcBitVector_ClearVector(egressVector, ingressVector);
-        // If no links remain, send a no route interest return message
+        // If no links are in the egress vector the FIB returned, return a no route interest message
         if (parcBitVector_NumberOfBitsSet(egressVector) == 0) {
-            CCNxInterestReturn *interestReturn = ccnxInterestReturn_Create(interest, CCNxInterestReturn_ReturnCode_NoRoute);
-            PARCBitVector *result = athenaTransportLinkAdapter_Send(athena->athenaTransportLinkAdapter, interestReturn, ingressVector);
-            parcBitVector_Release(&result);
-            ccnxInterestReturn_Release(&interestReturn);
+            if (ccnxWireFormatMessage_ConvertInterestToInterestReturn(interest,
+                                                                      CCNxInterestReturn_ReturnCode_NoRoute)) {
+
+                // NOTE: The Interest has been modified in-place. It is now an InterestReturn.
+                parcLog_Debug(athena->log, "Returning Interest as InterestReturn (code: NoRoute)");
+                PARCBitVector *result = athenaTransportLinkAdapter_Send(athena->athenaTransportLinkAdapter, interest,
+                                                                        ingressVector);
+                parcBitVector_Release(&result);
+            } else {
+                const char *name = ccnxName_ToString(ccnxName);
+                parcLog_Error(athena->log, "Unable to return Interest (%s) as InterestReturn (code: NoRoute).", name);
+                parcMemory_Deallocate(&name);
+            }
         } else {
             parcBitVector_SetVector(expectedReturnVector, egressVector);
             PARCBitVector *result = athenaTransportLinkAdapter_Send(athena->athenaTransportLinkAdapter, interest, egressVector);
@@ -230,12 +241,24 @@ _processInterest(Athena *athena, CCNxInterest *interest, PARCBitVector *ingressV
                 parcBitVector_Release(&result);
             }
         }
+        parcBitVector_Release(&egressVector);
     } else {
         // No FIB entry found, return a NoRoute interest return and remove the entry from the PIT.
-        CCNxInterestReturn *interestReturn = ccnxInterestReturn_Create(interest, CCNxInterestReturn_ReturnCode_NoRoute);
-        PARCBitVector *result = athenaTransportLinkAdapter_Send(athena->athenaTransportLinkAdapter, interestReturn, ingressVector);
-        parcBitVector_Release(&result);
-        ccnxInterestReturn_Release(&interestReturn);
+
+        if (ccnxWireFormatMessage_ConvertInterestToInterestReturn(interest,
+                                                                  CCNxInterestReturn_ReturnCode_NoRoute)) {
+
+            // NOTE: The Interest has been modified in-place. It is now an InterestReturn.
+            parcLog_Debug(athena->log, "Returning Interest as InterestReturn (code: NoRoute)");
+            PARCBitVector *result = athenaTransportLinkAdapter_Send(athena->athenaTransportLinkAdapter, interest,
+                                                                    ingressVector);
+            parcBitVector_Release(&result);
+        } else {
+            const char *name = ccnxName_ToString(ccnxName);
+            parcLog_Error(athena->log, "Unable to return Interest (%s) as InterestReturn (code: NoRoute).", name);
+            parcMemory_Deallocate(&name);
+        }
+
         const char *name = ccnxName_ToString(ccnxName);
         if (athenaPIT_RemoveInterest(athena->athenaPIT, interest, ingressVector) != true) {
             parcLog_Error(athena->log, "Unable to remove interest (%s) from the PIT.", name);
@@ -255,13 +278,34 @@ _processInterestReturn(Athena *athena, CCNxInterestReturn *interestReturn, PARCB
     // otherwise, may try another forwarding path or clear the PIT state and forward the interest return on the reverse path
 }
 
+static PARCBuffer *
+_createMessageHash(const CCNxMetaMessage *metaMessage)
+{
+    // We need to interact with the content message as a WireFormatMessage to get to
+    // the content hash API.
+    CCNxWireFormatMessage *wireFormatMessage = (CCNxWireFormatMessage *) metaMessage;
+
+    PARCCryptoHash *hash = ccnxWireFormatMessage_CreateContentObjectHash(wireFormatMessage);
+    if (hash != NULL) {
+        PARCBuffer *buffer = parcBuffer_Acquire(parcCryptoHash_GetDigest(hash));
+        parcCryptoHash_Release(&hash);
+        return buffer;
+    } else {
+        return NULL;
+    }
+}
+
 static void
 _processContentObject(Athena *athena, CCNxContentObject *contentObject, PARCBitVector *ingressVector)
 {
     //
     // *   (1) If it does not match anything in the PIT, drop it
     //
-    PARCBitVector *egressVector = athenaPIT_Match(athena->athenaPIT, contentObject, ingressVector);
+    const CCNxName *name = ccnxContentObject_GetName(contentObject);
+    PARCBuffer *keyId = ccnxContentObject_GetKeyId(contentObject);
+    PARCBuffer *digest = _createMessageHash(contentObject);
+
+    PARCBitVector *egressVector = athenaPIT_Match(athena->athenaPIT, name, keyId, digest, ingressVector);
     if (egressVector) {
         if (parcBitVector_NumberOfBitsSet(egressVector) > 0) {
             //
@@ -276,6 +320,40 @@ _processContentObject(Athena *athena, CCNxContentObject *contentObject, PARCBitV
             parcLog_Debug(athena->log, "Content Object forwarded to %s.", egressVectorString);
             parcMemory_Deallocate(&egressVectorString);
             PARCBitVector *result = athenaTransportLinkAdapter_Send(athena->athenaTransportLinkAdapter, contentObject, egressVector);
+            if (result) {
+                // if there are failed channels, client will resend interest unless we wish to retry here
+                parcBitVector_Release(&result);
+            }
+        }
+        parcBitVector_Release(&egressVector);
+    }
+}
+
+static void
+_processManifest(Athena *athena, CCNxManifest *manifest, PARCBitVector *ingressVector)
+{
+    //
+    // *   (1) If it does not match anything in the PIT, drop it
+    //
+    const CCNxName *name = ccnxManifest_GetName(manifest);
+    PARCBuffer *digest = _createMessageHash(manifest);
+
+    PARCBitVector *egressVector = athenaPIT_Match(athena->athenaPIT, name, NULL, digest, ingressVector);
+    if (egressVector) {
+        if (parcBitVector_NumberOfBitsSet(egressVector) > 0) {
+            //
+            // *   (2) Add to the Content Store
+            //
+            athenaContentStore_PutContentObject(athena->athenaContentStore, manifest);
+            // _athenaPIT_RemoveInterestFromMap
+
+            //
+            // *   (3) Reverse path forward it via PIT entries
+            //
+            const char *egressVectorString = parcBitVector_ToString(egressVector);
+            parcLog_Debug(athena->log, "Manifest forwarded to %s.", egressVectorString);
+            parcMemory_Deallocate(&egressVectorString);
+            PARCBitVector *result = athenaTransportLinkAdapter_Send(athena->athenaTransportLinkAdapter, manifest, egressVector);
             if (result) {
                 // if there are failed channels, client will resend interest unless we wish to retry here
                 parcBitVector_Release(&result);
@@ -316,6 +394,12 @@ athena_ProcessMessage(Athena *athena, CCNxMetaMessage *ccnxMessage, PARCBitVecto
         CCNxInterestReturn *interestReturn = ccnxMetaMessage_GetInterestReturn(ccnxMessage);
         _processInterestReturn(athena, interestReturn, ingressVector);
         athena->stats.numProcessedInterestReturns++;
+    } else if (ccnxMetaMessage_IsManifest(ccnxMessage)) {
+        parcLog_Debug(athena->log, "Processing Interest Return Message");
+
+        CCNxManifest *manifest = ccnxMetaMessage_GetManifest(ccnxMessage);
+        _processManifest(athena, manifest, ingressVector);
+        athena->stats.numProcessedManifests++;
     } else {
         trapUnexpectedState("Invalid CCNxMetaMessage type");
     }
@@ -326,7 +410,8 @@ athena_EncodeMessage(CCNxMetaMessage *message)
 {
     PARCSigner *signer = ccnxValidationCRC32C_CreateSigner();
     CCNxCodecNetworkBufferIoVec *iovec = ccnxCodecTlvPacket_DictionaryEncode(message, signer);
-    assertTrue(ccnxWireFormatMessage_PutIoVec(message, iovec), "ccnxWireFormatMessage_PutIoVec failed");;
+    bool result = ccnxWireFormatMessage_PutIoVec(message, iovec);
+    assertTrue(result, "ccnxWireFormatMessage_PutIoVec failed");
     ccnxCodecNetworkBufferIoVec_Release(&iovec);
     parcSigner_Release(&signer);
 }

@@ -31,11 +31,14 @@
 
 #include <config.h>
 
+#include <stdio.h>
+
 #include "athena.h"
 #include "athena_PIT.h"
 
 #include <ccnx/common/ccnx_NameSegmentNumber.h>
 #include <ccnx/common/ccnx_WireFormatMessage.h>
+#include <ccnx/common/ccnx_ContentObject.h>
 
 #include <parc/algol/parc_Object.h>
 #include <parc/algol/parc_JSON.h>
@@ -271,7 +274,9 @@ _athenaPIT_createCompoundKey(const CCNxName *name, const PARCBuffer *buffer)
 {
     PARCBufferComposer *composer = parcBufferComposer_Create();
 
-    composer = ccnxName_BuildString(name, composer);
+    if (name != NULL) {
+        composer = ccnxName_BuildString(name, composer);
+    }
 
     if (buffer != NULL) {
         parcBufferComposer_PutBuffer(composer, buffer);
@@ -492,12 +497,11 @@ athenaPIT_AddInterest(AthenaPIT *athenaPIT,
     uint64_t now = parcClock_GetTime(athenaPIT->clock);
     expiration += now;
 
-    //Get the most restrictive key
+    // Get the most restrictive key
     PARCBuffer *key = _athenaPIT_acquireInterestKey(ccnxInterestMessage);
-
     _AthenaPITEntry *entry = (_AthenaPITEntry *) parcHashMap_Get(athenaPIT->entryTable, key);
 
-    if (entry == NULL) { //New PIT entry
+    if (entry == NULL) { // New PIT entry
         // Make sure we don't exceed our desired limit
         if (parcHashMap_Size(athenaPIT->entryTable) >= athenaPIT->capacity) {
             // Try and free up some entries
@@ -507,10 +511,9 @@ athenaPIT_AddInterest(AthenaPIT *athenaPIT,
         if (parcHashMap_Size(athenaPIT->entryTable) < athenaPIT->capacity) {
             PARCBitVector *newEgressVector = parcBitVector_Create();
 
+            // Add the default entry which contains the Interest name
             _AthenaPITEntry *newEntry =
                 _athenaPITEntry_Create(key, ccnxInterestMessage, ingressVector, newEgressVector, expiration, now);
-
-            parcBitVector_Release(&newEgressVector);
 
             parcHashMap_Put(athenaPIT->entryTable, key, newEntry);
             ++athenaPIT->interestCount;
@@ -520,7 +523,24 @@ athenaPIT_AddInterest(AthenaPIT *athenaPIT,
 
             entry = newEntry;
 
+            // Add an entry without a name, but only if a ContentObjectHashRestriction was provided
+            const PARCBuffer *contentId = ccnxInterest_GetContentObjectHashRestriction(ccnxInterestMessage);
+            if (contentId != NULL) {
+                PARCBuffer *namelessKey = _athenaPIT_createCompoundKey(NULL, contentId);
+
+                _AthenaPITEntry *namelessEntry =
+                        _athenaPITEntry_Create(namelessKey, ccnxInterestMessage, ingressVector, newEgressVector, expiration, now);
+                parcHashMap_Put(athenaPIT->entryTable, namelessKey, namelessEntry);
+
+                _athenaPIT_addInterestToLinkCleanupList(athenaPIT, ingressVector, namelessEntry);
+                _athenaPIT_addInterestToTimeoutTable(athenaPIT, expiration, namelessEntry);
+
+                _athenaPITEntry_Release(&namelessEntry);
+                parcBuffer_Release(&namelessKey);
+            }
+
             _athenaPITEntry_Release(&newEntry);
+            parcBitVector_Release(&newEgressVector);
             result = AthenaPITResolution_Forward;
         }
     } else if (parcBitVector_Contains(entry->ingress, ingressVector)) {
@@ -554,18 +574,6 @@ athenaPIT_AddInterest(AthenaPIT *athenaPIT,
     }
 
     return result;
-}
-
-
-static PARCCryptoHash*
-_createContentObjectHash(const CCNxContentObject *ccnxContentMessage)
-{
-    // We need to interact with the content message as a WireFormatMessage to get to
-    // the content hash API.
-    CCNxWireFormatMessage *wireFormatMessage = (CCNxWireFormatMessage *) ccnxContentMessage;
-
-    PARCCryptoHash *hash = ccnxWireFormatMessage_CreateContentObjectHash(wireFormatMessage);
-    return hash;
 }
 
 bool
@@ -609,81 +617,91 @@ athenaPIT_RemoveInterest(AthenaPIT *athenaPIT,
     return result;
 }
 
-PARCBitVector *
-athenaPIT_Match(AthenaPIT *athenaPIT,
-                const CCNxContentObject *ccnxContentMessage,
-                const PARCBitVector *ingressVector)
+static void
+_athenaPIT_LookupKey(AthenaPIT *athenaPIT, PARCBuffer *key, PARCBitVector *egressVector)
 {
-    //TODO: Add egress check.
-
-    PARCBitVector *result = parcBitVector_Create();
-
-    CCNxName *name = ccnxContentObject_GetName(ccnxContentMessage);
-
-    // Match based on Name alone
-    PARCBuffer *key = _athenaPIT_createCompoundKey(name, NULL);
     _AthenaPITEntry *entry = (_AthenaPITEntry *) parcHashMap_Get(athenaPIT->entryTable, key);
 
     // We have an entry, set the match vector and remove
     if (entry != NULL) {
         uint64_t now = parcClock_GetTime(athenaPIT->clock);
         _athenaPIT_AddLifetimeStat(athenaPIT, _athenaPITEntry_Age(entry, now));
-        parcBitVector_SetVector(result, entry->ingress);
+        parcBitVector_SetVector(egressVector, entry->ingress);
 
         // Remove Match
         _athenaPIT_removeInterestFromCleanupList(athenaPIT, entry->ingress, key);
         parcHashMap_Remove(athenaPIT->entryTable, key);
         _athenaPIT_removeInterestFromTimeoutTable(athenaPIT, entry);
-        athenaPIT->interestCount -= parcBitVector_NumberOfBitsSet(result);
+        athenaPIT->interestCount -= parcBitVector_NumberOfBitsSet(egressVector);
     }
+}
+
+static PARCBitVector *
+_athenaPIT_MatchWithName(AthenaPIT *athenaPIT,
+                        const CCNxName *name,
+                        const PARCBuffer *keyId,
+                        const PARCBuffer *contentId,
+                        const PARCBitVector *ingressVector)
+{
+    //TODO: Add egress check.
+
+    PARCBitVector *result = parcBitVector_Create();
+
+    // Match based on Name alone
+    PARCBuffer *key = _athenaPIT_createCompoundKey(name, NULL);
+    _athenaPIT_LookupKey(athenaPIT, key, result);
     parcBuffer_Release(&key);
 
-
-    // Match based on Name & keyId Restriction
-    // A content object may or may not have a keyId
-    PARCBuffer *keyId = ccnxContentObject_GetKeyId(ccnxContentMessage);
+    // Match with Name and KeyId
     if (keyId != NULL) {
         key = _athenaPIT_createCompoundKey(name, keyId);
-        entry = (_AthenaPITEntry *) parcHashMap_Get(athenaPIT->entryTable, key);
-        if (entry != NULL) {
-            uint64_t now = parcClock_GetTime(athenaPIT->clock);
-            _athenaPIT_AddLifetimeStat(athenaPIT, _athenaPITEntry_Age(entry, now));
-            parcBitVector_SetVector(result, entry->ingress);
-
-            // Remove Match
-            _athenaPIT_removeInterestFromCleanupList(athenaPIT, entry->ingress, key);
-            parcHashMap_Remove(athenaPIT->entryTable, key);
-            _athenaPIT_removeInterestFromTimeoutTable(athenaPIT, entry);
-            athenaPIT->interestCount -= parcBitVector_NumberOfBitsSet(result);
-        }
+        _athenaPIT_LookupKey(athenaPIT, key, result);
         parcBuffer_Release(&key);
     }
 
     // Match based on Name & Content Id Restriction
-    PARCCryptoHash *contentId = _createContentObjectHash(ccnxContentMessage);
     // M.S. Nominally, the contentId should not be null as any content message received
     // should be hashable. But because locally generated contentObjects are not currently
     // hashable, we need to support this case.
     if (contentId != NULL) {
-        key = _athenaPIT_createCompoundKey(name, parcCryptoHash_GetDigest(contentId));
-        parcCryptoHash_Release(&contentId);
-        entry = (_AthenaPITEntry *) parcHashMap_Get(athenaPIT->entryTable, key);
-
-        // We have an entry, set the match vector and remove
-        if (entry != NULL) {
-            uint64_t now = parcClock_GetTime(athenaPIT->clock);
-            _athenaPIT_AddLifetimeStat(athenaPIT, _athenaPITEntry_Age(entry, now));
-            parcBitVector_SetVector(result, entry->ingress);
-
-            // Remove Match
-            _athenaPIT_removeInterestFromCleanupList(athenaPIT, entry->ingress, key);
-            parcHashMap_Remove(athenaPIT->entryTable, key);
-            _athenaPIT_removeInterestFromTimeoutTable(athenaPIT, entry);
-            athenaPIT->interestCount -= parcBitVector_NumberOfBitsSet(result);
-        }
+        key = _athenaPIT_createCompoundKey(name, contentId);
+        _athenaPIT_LookupKey(athenaPIT, key, result);
         parcBuffer_Release(&key);
     }
+
     return result;
+}
+
+static PARCBitVector *
+_athenaPIT_MatchNameless(AthenaPIT *athenaPIT,
+                        const CCNxName *name,
+                        const PARCBuffer *keyId,
+                        const PARCBuffer *contentId,
+                        const PARCBitVector *ingressVector)
+{
+    PARCBitVector *result = parcBitVector_Create();
+
+    if (contentId != NULL) {
+        PARCBuffer *key = _athenaPIT_createCompoundKey(NULL, contentId);
+        _athenaPIT_LookupKey(athenaPIT, key, result);
+        parcBuffer_Release(&key);
+    }
+
+    return result;
+}
+
+PARCBitVector *
+athenaPIT_Match(AthenaPIT *athenaPIT,
+                const CCNxName *name,
+                const PARCBuffer *keyId,
+                const PARCBuffer *digest,
+                const PARCBitVector *ingressVector)
+{
+    if (name == NULL) {
+        return _athenaPIT_MatchNameless(athenaPIT, name, keyId, digest, ingressVector);
+    } else {
+        return _athenaPIT_MatchWithName(athenaPIT, name, keyId, digest, ingressVector);
+    }
 }
 
 bool
@@ -880,7 +898,8 @@ athenaPIT_ProcessMessage(const AthenaPIT *athenaPIT, const CCNxMetaMessage *mess
         }
 
         if (responsePayload != NULL) {
-            CCNxContentObject *contentObjectResponse = ccnxContentObject_CreateWithDataPayload(ccnxInterest_GetName(interest), responsePayload);
+            CCNxContentObject *contentObjectResponse =
+                ccnxContentObject_CreateWithNameAndPayload(ccnxInterest_GetName(interest), responsePayload);
 
             result = ccnxMetaMessage_CreateFromContentObject(contentObjectResponse);
 
@@ -890,4 +909,61 @@ athenaPIT_ProcessMessage(const AthenaPIT *athenaPIT, const CCNxMetaMessage *mess
     }
 
     return result;  // could be NULL
+}
+
+PARCList *
+athenaPIT_CreateEntryList(const AthenaPIT *athenaPIT)
+{
+    PARCList *result =
+            parcList(parcArrayList_Create((void (*)(void **)) parcBuffer_Release), PARCArrayListAsPARCList);
+
+    char lineStr[512];
+    PARCIterator *it = parcHashMap_CreateValueIterator(athenaPIT->entryTable);
+    snprintf (lineStr, 512, "Name,ingress,egress,KeyIdRestricted,HashRestricted,Nameless");
+    PARCBuffer *line = parcBuffer_AllocateCString(lineStr);
+    parcList_Add(result, (PARCObject *)line);
+    while(parcIterator_HasNext(it)) {
+        _AthenaPITEntry *entry = (_AthenaPITEntry *)parcIterator_Next(it);
+        CCNxName *name = ccnxInterest_GetName(entry->ccnxMessage);
+        char nameStr[256];
+        if (name != NULL) {
+            PARCBufferComposer *composer = parcBufferComposer_Create();
+            composer = ccnxName_BuildString(name, composer);
+            char *temp = parcBufferComposer_ToString(composer);
+            parcBufferComposer_Release(&composer);
+            snprintf(nameStr, 256, "%s", temp);
+            parcMemory_Deallocate(&temp);
+        } else {
+            sprintf(nameStr, "[nameless]");
+        }
+        char *ingressStr = parcBitVector_ToString(entry->ingress);
+        char *egressStr = parcBitVector_ToString(entry->egress);
+        PARCBuffer *contentId =
+            ccnxInterest_GetContentObjectHashRestriction(entry->ccnxMessage);
+        bool hashRestricted = (contentId != NULL);
+        bool keyIdRestricted =
+            (ccnxInterest_GetKeyIdRestriction(entry->ccnxMessage) != NULL);
+        bool nameless = false;
+        if (hashRestricted) {
+            PARCBuffer *testKey = _athenaPIT_createCompoundKey(NULL, contentId);
+            nameless = parcBuffer_Equals(testKey, entry->key);
+            parcBuffer_Release(&testKey);
+        }
+        snprintf (lineStr, 512, "%s,%s,%s,%s,%s,%s",
+                  nameStr,
+                  ingressStr,
+                  egressStr,
+                  (keyIdRestricted ? "true" : "false"),
+                  (hashRestricted ? "true" : "false"),
+                  (nameless ? "true" : "false")
+        );
+        parcMemory_Deallocate(&ingressStr);
+        parcMemory_Deallocate(&egressStr);
+
+        PARCBuffer *line = parcBuffer_AllocateCString(lineStr);
+        parcList_Add(result, (PARCObject *)line);
+    }
+    parcIterator_Release(&it);
+
+    return result;
 }

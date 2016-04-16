@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016, Xerox Corporation (Xerox)and Palo Alto Research Center (PARC)
+ * Copyright (c) 2015, Xerox Corporation (Xerox)and Palo Alto Research Center (PARC)
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,7 @@
  */
 /**
  * @author Kevin Fox, Palo Alto Research Center (Xerox PARC)
- * @copyright 2015-2016, Xerox Corporation (Xerox)and Palo Alto Research Center (PARC).  All rights reserved.
+ * @copyright 2015, Xerox Corporation (Xerox)and Palo Alto Research Center (PARC).  All rights reserved.
  */
 #include <config.h>
 #include "../athena_TransportLinkModuleUDP.c"
@@ -82,6 +82,7 @@ void
 _removeLink(void *context, PARCBitVector *parcBitVector)
 {
     assertNull(context, "_removeLink called with a non null argument");
+    //AthenaTransportLinkAdapter *athenaTransportLinkAdapter = (AthenaTransportLinkAdapter *) context;
 }
 
 LONGBOW_TEST_CASE(Global, athenaTransportLinkModuleUDP_OpenClose)
@@ -161,7 +162,7 @@ LONGBOW_TEST_CASE(Global, athenaTransportLinkModuleUDP_SendReceive)
 
     athenaTransportLinkAdapter_Poll(athenaTransportLinkAdapter, 0);
 
-    CCNxName *name = ccnxName_CreateFromURI("lci:/foo/bar");
+    CCNxName *name = ccnxName_CreateFromCString("lci:/foo/bar");
     CCNxMetaMessage *ccnxMetaMessage = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
@@ -224,7 +225,7 @@ LONGBOW_TEST_CASE(Global, athenaTransportLinkModuleUDP_MTU)
 
     athenaTransportLinkAdapter_Poll(athenaTransportLinkAdapter, 0);
 
-    CCNxName *name = ccnxName_CreateFromURI("lci:/foo/bar");
+    CCNxName *name = ccnxName_CreateFromCString("lci:/foo/bar");
     CCNxMetaMessage *ccnxMetaMessage = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 
@@ -273,7 +274,7 @@ LONGBOW_TEST_CASE(Global, athenaTransportLinkModuleUDP_P2P)
     assertTrue(result != NULL, "athenaTransportLinkAdapter_Open failed (%s)", strerror(errno));
     parcURI_Release(&connectionURI);
 
-    CCNxName *name = ccnxName_CreateFromURI("lci:/foo/bar");
+    CCNxName *name = ccnxName_CreateFromCString("lci:/foo/bar");
     CCNxMetaMessage *ccnxMetaMessage = ccnxInterest_CreateSimple(name);
     ccnxName_Release(&name);
 

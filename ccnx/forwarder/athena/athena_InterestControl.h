@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Xerox Corporation (Xerox)and Palo Alto Research Center (PARC)
+ * Copyright (c) 2015-2016, Xerox Corporation (Xerox)and Palo Alto Research Center (PARC)
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,10 +26,10 @@
  */
 /**
  * @author Kevin Fox, Palo Alto Research Center (Xerox PARC)
- * @copyright 2015, Xerox Corporation (Xerox)and Palo Alto Research Center (PARC).  All rights reserved.
+ * @copyright 2015-2016, Xerox Corporation (Xerox)and Palo Alto Research Center (PARC).  All rights reserved.
  */
-#ifndef athena_InterestControl_h
-#define athena_InterestControl_h
+#ifndef libathena_InterestControl_h
+#define libathena_InterestControl_h
 
 #include "athena.h"
 #include <ccnx/common/ccnx_Interest.h>
@@ -65,4 +65,25 @@
  */
 int athenaInterestControl(Athena *athena, CCNxInterest *interest, PARCBitVector *ingressVector);
 
-#endif // athena_InterestControl_h
+/**
+ * @abstract log a change in the forwarder configuration
+ * @discussion
+ *
+ * @param [in] athena forwarder context
+ * @param [in] ccnx interest control name
+ * @param [in] control message payload to log
+ *
+ * Example:
+ * @code
+ * {
+ *     Athena *athena = athena_Create();
+ *     CCNxName *addLink = ccnxName_CreateFromCString(CCNxNameAthenaCommand_LinkConnect);
+ *     const char *connectionSpecification = "tcp://localhost:9695/name=myLoopback";
+ *     athenaInterestControl_LogConfigurationChange(athena, addLink, "%s", connectionSpecification);
+ *     ccnxName_Release(&addLink);
+ *     athena_Release(&athena);
+ * }
+ * @endcode
+ */
+void athenaInterestControl_LogConfigurationChange(Athena *athena, CCNxName *ccnxName, const char *format, ...);
+#endif // libathena_InterestControl_h
